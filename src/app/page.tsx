@@ -212,6 +212,7 @@ export default function Page() {
 
   const openHistory = (entry: HistoryEntry) => {
     stopDemo();
+    setHistory(saveHistoryEntry({ domain: entry.domain, request: entry.request, brief: entry.brief }));
     setBrief(entry.brief);
     setDomain(entry.domain);
     setResearchRequest(entry.request);
