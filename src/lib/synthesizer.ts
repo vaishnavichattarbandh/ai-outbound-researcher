@@ -130,7 +130,28 @@ async function generate(ai: GoogleGenAI, prompt: string, extra = ""): Promise<un
 }
 
 function normalizeEvidence(text: string): string {
-  return text.replace(/\s+/g, " ").trim().toLowerCase();
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+function matchingExcerpt(sourceText: string, requestedExcerpt: string): string | undefined {
+  const words = [...sourceText.matchAll(/[A-Za-z0-9][A-Za-z0-9'’-]*/g)];
+  if (words.length < 8) return undefined;
+  const requested = new Set(normalizeEvidence(requestedExcerpt).split(" ").filter(Boolean));
+  let best: { excerpt: string; score: number } | undefined;
+
+  for (let start = 0; start <= words.length - 8; start++) {
+    for (let length = 8; length <= Math.min(20, words.length - start); length++) {
+      const selected = words.slice(start, start + length);
+      const excerpt = sourceText.slice(selected[0].index, selected[selected.length - 1].index! + selected[selected.length - 1][0].length);
+      const normalized = normalizeEvidence(excerpt);
+      if (normalizeEvidence(sourceText).includes(normalized) && normalized === normalizeEvidence(requestedExcerpt)) return excerpt;
+      const tokens = new Set(normalized.split(" "));
+      const overlap = [...requested].filter((token) => tokens.has(token)).length;
+      const score = requested.size ? overlap / requested.size : 0;
+      if (!best || score > best.score) best = { excerpt, score };
+    }
+  }
+  return best && best.score >= 0.45 ? best.excerpt : undefined;
 }
 
 function validateEvidence(brief: OutboundBrief, ctx: Enrichment): string | undefined {
@@ -139,8 +160,13 @@ function validateEvidence(brief: OutboundBrief, ctx: Enrichment): string | undef
     const evidence = normalizeEvidence(trigger.evidenceExcerpt);
     delete trigger.publishedAt;
     if (trigger.sourceType === "Website") {
-      if (url !== ctx.websiteUrl || !normalizeEvidence(ctx.websiteMarkdown).includes(evidence)) {
+      if (url !== ctx.websiteUrl) {
         return `triggerSignals.${index}.evidenceExcerpt is not an exact excerpt from the website at its cited URL`;
+      }
+      if (!normalizeEvidence(ctx.websiteMarkdown).includes(evidence)) {
+        const excerpt = matchingExcerpt(ctx.websiteMarkdown, trigger.evidenceExcerpt);
+        if (!excerpt) return `triggerSignals.${index}.evidenceExcerpt could not be matched to the website at its cited URL`;
+        trigger.evidenceExcerpt = excerpt;
       }
       trigger.confidence = "High";
       continue;
@@ -148,13 +174,136 @@ function validateEvidence(brief: OutboundBrief, ctx: Enrichment): string | undef
 
     const source = ctx.snippets.find((snippet) => snippet.url === url);
     const expectedKind = trigger.sourceType === "Recent News" ? "Recent News" : "Hiring/Growth";
-    if (!source || source.kind !== expectedKind || !normalizeEvidence(`${source.title} ${source.snippet}`).includes(evidence)) {
+    if (!source || source.kind !== expectedKind) {
       return `triggerSignals.${index} does not match the cited search result`;
+    }
+    if (!normalizeEvidence(`${source.title} ${source.snippet}`).includes(evidence)) {
+      const excerpt = matchingExcerpt(`${source.title} ${source.snippet}`, trigger.evidenceExcerpt);
+      if (!excerpt) return `triggerSignals.${index}.evidenceExcerpt could not be matched to the cited search result`;
+      trigger.evidenceExcerpt = excerpt;
     }
     if (source.date) trigger.publishedAt = source.date;
     trigger.confidence = "Medium";
   }
   return undefined;
+}
+
+const generatedEmailSchema = z.object({ subjectLine: z.string(), body: z.string() });
+const generatedSequenceSchema = z.object({
+  day1ColdEmail: generatedEmailSchema,
+  day2LinkedIn: z.object({ connectionNote: z.string(), followUpDm: z.string() }),
+  day5BumpEmail: generatedEmailSchema,
+});
+const generatedBriefSchema = OutboundBriefSchema.extend({
+  triggerSignals: z.array(z.object({
+    signal: z.string(),
+    sourceType: z.enum(SOURCE_TYPES),
+    relevanceToPersona: z.string(),
+    sourceUrl: z.string(),
+    evidenceExcerpt: z.string(),
+    publishedAt: z.string().optional(),
+    confidence: z.enum(["High", "Medium", "Low"]),
+  })).min(2).max(4),
+  outboundSequence: generatedSequenceSchema,
+});
+
+function normalizeEmail(email: z.infer<typeof generatedEmailSchema>, lowercaseSubject = false) {
+  let subjectLine = email.subjectLine.trim().replace(/\s+/g, " ");
+  if (lowercaseSubject) {
+    subjectLine = subjectLine.toLowerCase().split(" ").slice(0, 4).join(" ");
+    if (wordCount(subjectLine) === 1) subjectLine += " update";
+  }
+  return {
+    subjectLine,
+    body: email.body.trim().split(/\s+/).filter(Boolean).slice(0, 79).join(" "),
+  };
+}
+
+function normalizeSequence(sequence: z.infer<typeof generatedSequenceSchema>): OutboundBrief["outboundSequence"] {
+  const dmSentences = sequence.day2LinkedIn.followUpDm.trim().match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((part) => part.trim()).filter(Boolean) ?? [];
+  const followUpDm = dmSentences.length > 1
+    ? dmSentences.slice(0, 2).join(" ")
+    : `${dmSentences[0] ?? ""} Would a brief conversation be useful?`.trim();
+  const note = sequence.day2LinkedIn.connectionNote.trim();
+  const connectionNote = note.length <= 300 ? note : `${note.slice(0, 297).replace(/\s+\S*$/, "")}...`;
+
+  return {
+    day1ColdEmail: normalizeEmail(sequence.day1ColdEmail, true),
+    day2LinkedIn: { connectionNote, followUpDm },
+    day5BumpEmail: normalizeEmail(sequence.day5BumpEmail),
+  };
+}
+
+function sourceExcerpt(sourceText: string, startWord: number): string | undefined {
+  const words = [...sourceText.matchAll(/[A-Za-z0-9][A-Za-z0-9'’-]*/g)];
+  if (words.length < 8) return undefined;
+  const start = Math.min(startWord, words.length - 8);
+  const selected = words.slice(start, Math.min(start + 16, words.length));
+  return sourceText.slice(selected[0].index, selected[selected.length - 1].index! + selected[selected.length - 1][0].length);
+}
+
+function fallbackBrief(req: ResearchRequest, ctx: Enrichment): Omit<OutboundBrief, "meta"> | undefined {
+  const sources = [
+    ...(ctx.websiteMarkdown ? [{ text: ctx.websiteMarkdown, sourceType: "Website" as const, url: ctx.websiteUrl }] : []),
+    ...ctx.snippets.map((snippet) => ({
+      text: `${snippet.title} ${snippet.snippet}`,
+      sourceType: snippet.kind,
+      url: snippet.url,
+    })),
+  ];
+  const evidence: Array<{ sourceType: typeof SOURCE_TYPES[number]; url: string; excerpt: string }> = [];
+  for (const source of sources) {
+    const first = sourceExcerpt(source.text, 0);
+    const second = sourceExcerpt(source.text, Math.floor(source.text.split(/\s+/).length / 2));
+    for (const excerpt of [first, second]) {
+      if (excerpt) evidence.push({ sourceType: source.sourceType, url: source.url, excerpt });
+    }
+  }
+  if (evidence.length === 0) return undefined;
+  while (evidence.length < 2) evidence.push(evidence[0]);
+  const signals = evidence.slice(0, 2).map((item) => ({
+    signal: "Public-source context is available; verify a specific business trigger before outreach.",
+    sourceType: item.sourceType,
+    relevanceToPersona: "Treat this source as a research starting point, not a confirmed buying signal.",
+    sourceUrl: item.url,
+    evidenceExcerpt: item.excerpt,
+    confidence: "Low" as const,
+  }));
+  const valueProp = req.senderContext?.valueProposition ?? req.senderValueProp;
+  const fallbackConnectionNote = `I work with ${req.senderContext?.companyName ?? "teams"} on ${req.senderContext?.productPitch ?? req.senderValueProp}. Open to connecting?`;
+  return {
+    companyName: req.targetCompanyName || req.companyDomain,
+    oneLineSummary: "A conservative fallback was used because generated content did not pass evidence or format checks; verify the cited sources before outreach.",
+    icpFitScore: 3,
+    icpFitReasoning: "Available evidence was insufficient for a confident fit assessment; verify the account before outreach.",
+    icpFitBreakdown: {
+      gtmVelocity: { score: 3, reasoning: "No reliable growth conclusion could be drawn from the available evidence." },
+      productComplexity: { score: 3, reasoning: "Available source material did not support a confident assessment." },
+      signalRecency: { score: 3, reasoning: "No sufficiently clear recent buying signal was verified." },
+    },
+    triggerSignals: signals,
+    hypothesizedPainPoints: [
+      `A potential challenge for a ${req.targetPersona} is prioritizing relevant initiatives; validate this in conversation.`,
+      `The value of ${req.senderContext?.companyName ?? "your offering"} may depend on the team's current workflow; ask before assuming a need.`,
+    ],
+    outboundSequence: {
+      day1ColdEmail: {
+        subjectLine: "a quick question",
+        body: `I’m reaching out because I’m researching how ${req.targetPersona} teams approach their current priorities. ${valueProp} Would it be useful to compare notes?`,
+      },
+      day2LinkedIn: {
+        connectionNote: fallbackConnectionNote.length <= 300
+          ? fallbackConnectionNote
+          : `${fallbackConnectionNote.slice(0, 297).replace(/\s+\S*$/, "")}...`,
+        followUpDm: "I wanted to follow up with a brief note about our work. Would a short conversation be useful?",
+      },
+      day5BumpEmail: {
+        subjectLine: "following up",
+        body: `Following up in case this is relevant. ${valueProp} If this is not a priority, no worries.`,
+      },
+    },
+    tone: req.tone,
+  };
 }
 
 function normalizeError(error: unknown): UpstreamError | undefined {
@@ -174,7 +323,7 @@ export async function synthesize(
 ): Promise<Omit<OutboundBrief, "meta">> {
   const ai = new GoogleGenAI({ apiKey });
   const prompt = buildPrompt(req, ctx);
-  let issues = "";
+  let issues = "Gemini did not return a usable brief.";
   onProgress?.("gemini", "running");
 
   try {
@@ -182,15 +331,24 @@ export async function synthesize(
       const extra = attempt === 0 ? "" : `\nRETRY: Fix these validation issues without inventing evidence: ${issues}`;
       try {
         const generated = await generate(ai, prompt, extra);
-        const parsed = OutboundBriefSchema.safeParse(generated);
+        const parsed = generatedBriefSchema.safeParse(generated);
         if (!parsed.success) {
           issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
           continue;
         }
-        issues = validateEvidence(parsed.data, ctx) ?? "";
+        const normalized = {
+          ...parsed.data,
+          outboundSequence: normalizeSequence(parsed.data.outboundSequence),
+        };
+        issues = validateEvidence(normalized, ctx) ?? "";
         if (!issues) {
+          const finalBrief = OutboundBriefSchema.safeParse(normalized);
+          if (!finalBrief.success) {
+            issues = finalBrief.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+            continue;
+          }
           onProgress?.("gemini", "complete");
-          return { ...parsed.data, tone: req.tone };
+          return { ...finalBrief.data, tone: req.tone };
         }
       } catch (error) {
         const upstream = normalizeError(error);
@@ -198,27 +356,17 @@ export async function synthesize(
         issues = error instanceof Error ? error.message : String(error);
       }
     }
-    throw new UpstreamError("The model returned an invalid brief twice. Please try again.", 502);
+    const fallback = fallbackBrief(req, ctx);
+    if (fallback) {
+      onProgress?.("gemini", "complete");
+      return fallback;
+    }
+    throw new UpstreamError(`The model returned an invalid brief twice (${issues}). Please try again.`, 502);
   } catch (error) {
     onProgress?.("gemini", "failed");
     throw error;
   }
 }
-
-const generatedSequenceSchema = z.object({
-  day1ColdEmail: z.object({
-    subjectLine: z.string().refine((s) => wordCount(s) >= 2 && wordCount(s) <= 4).refine((s) => s === s.toLowerCase()),
-    body: z.string().refine((s) => wordCount(s) < 80),
-  }),
-  day2LinkedIn: z.object({
-    connectionNote: z.string().min(1).max(300),
-    followUpDm: z.string().min(1).refine((s) => s.trim().split(/(?<=[.!?])\s+/).filter(Boolean).length === 2),
-  }),
-  day5BumpEmail: z.object({
-    subjectLine: z.string().min(1),
-    body: z.string().refine((s) => wordCount(s) < 80),
-  }),
-});
 
 export async function regenerateSequence(
   apiKey: string,
@@ -244,6 +392,7 @@ ${evidence}
 
 Return the required sequence: Day 1 cold email (2-4 lowercase subject words; under 80 words), Day 2 LinkedIn connection note (under 300 characters) and follow-up DM (exactly 2 sentences), Day 5 bump email (under 80 words). Make the touches distinct, relevant, and low-pressure.`;
 
+  let issues = "Gemini did not return a usable sequence.";
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await ai.models.generateContent({
@@ -258,12 +407,19 @@ Return the required sequence: Day 1 cold email (2-4 lowercase subject words; und
       });
       const result: unknown = JSON.parse((response.text ?? "").replace(/```json|```/g, "").trim());
       const parsed = generatedSequenceSchema.safeParse(result);
-      if (parsed.success) return parsed.data;
+      if (parsed.success) {
+        const normalized = normalizeSequence(parsed.data);
+        const validated = OutboundBriefSchema.shape.outboundSequence.safeParse(normalized);
+        if (validated.success) return validated.data;
+        issues = validated.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+      } else {
+        issues = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+      }
     } catch (error) {
       const upstream = normalizeError(error);
       if (upstream) throw upstream;
-      if (attempt === 1) throw new UpstreamError("Could not regenerate the sequence. Please try again.", 502);
+      issues = error instanceof Error ? error.message : String(error);
     }
   }
-  throw new UpstreamError("The regenerated sequence did not meet the length and format requirements.", 502);
+  throw new UpstreamError(`The regenerated sequence did not meet validation requirements (${issues}).`, 502);
 }
