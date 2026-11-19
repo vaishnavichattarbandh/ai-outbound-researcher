@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Loader2, MessageCircle, Send, Sparkles, Trash2 } from "lucide-react";
-import { z } from "zod";
+import { extractGeminiErrorMessage, extractGeminiText } from "@/lib/gemini-response";
 import type { OutboundBrief } from "@/lib/schemas";
 import { loadKeys } from "@/lib/keys";
 
@@ -22,10 +22,6 @@ const STARTERS = [
   "What should I verify before reaching out?",
   "Help me improve my opening line.",
 ];
-const ResponseSchema = z.object({
-  answer: z.string().optional(),
-  error: z.string().optional(),
-});
 
 export default function AIAssistant({ context, onOpenSettings }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -53,17 +49,28 @@ export default function AIAssistant({ context, onOpenSettings }: Props) {
         headers: { "Content-Type": "application/json", "x-gemini-api-key": apiKey },
         body: JSON.stringify({ messages: nextMessages.slice(-12), context }),
       });
+      const rawPayload = await response.text();
       let payload: unknown;
       try {
-        payload = await response.json();
+        payload = JSON.parse(rawPayload);
       } catch {
-        throw new Error("The assistant returned an unreadable response. Please try again.");
+        console.error("AI Assistant API returned a non-JSON response", { status: response.status, payload: rawPayload });
+        const detail = rawPayload.trim().slice(0, 500);
+        throw new Error(
+          response.ok
+            ? `The assistant service returned a non-JSON response (HTTP ${response.status}). Check the server logs.`
+            : `Assistant request failed (HTTP ${response.status})${detail ? `: ${detail}` : "."}`,
+        );
       }
-      const parsed = ResponseSchema.safeParse(payload);
-      if (!parsed.success) throw new Error("The assistant response was missing a valid answer.");
-      if (!response.ok) throw new Error(parsed.data.error ?? `Assistant request failed (HTTP ${response.status}).`);
-      const answer = parsed.data.answer?.trim();
-      if (!answer) throw new Error("Gemini returned an empty assistant response. Please try again.");
+      if (!response.ok) {
+        console.error("AI Assistant API returned an error", { status: response.status, payload });
+        throw new Error(extractGeminiErrorMessage(payload) ?? `Assistant request failed (HTTP ${response.status}).`);
+      }
+      const answer = extractGeminiText(payload);
+      if (!answer) {
+        console.error("AI Assistant API response had no usable answer", { status: response.status, payload });
+        throw new Error(`The assistant returned no readable answer (HTTP ${response.status}). Please try again.`);
+      }
       setMessages((current) => [...current, { role: "model", content: answer }]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The assistant request failed. Please try again.");

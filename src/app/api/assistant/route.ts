@@ -1,9 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 import { GEMINI_MODEL, GEMINI_THINKING_CONFIG } from "@/lib/ai-config";
-import { geminiApiError, requestGemini } from "@/lib/gemini-client";
+import { geminiApiError } from "@/lib/gemini-client";
+import { extractGeminiErrorMessage, extractGeminiText, rawGeminiPayload } from "@/lib/gemini-response";
 import { OutboundBriefSchema, formatZodIssues } from "@/lib/schemas";
-import { UpstreamError } from "@/lib/scraper";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -56,27 +55,63 @@ export async function POST(req: NextRequest) {
   ].join("\n\n");
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await requestGemini(() => ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: parsed.data.messages.map((message) => ({
-        role: message.role,
-        parts: [{ text: message.content }],
-      })),
-      config: {
-        systemInstruction,
-        thinkingConfig: GEMINI_THINKING_CONFIG,
-        temperature: 0.5,
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          contents: parsed.data.messages.map((message) => ({
+            role: message.role,
+            parts: [{ text: message.content }],
+          })),
+          generationConfig: {
+            thinkingConfig: GEMINI_THINKING_CONFIG,
+            temperature: 0.5,
+          },
+        }),
       },
-    }));
-    const answer = response.text?.trim();
+    );
+    const rawPayload = await response.text();
+    let payload: unknown = rawPayload;
+    try {
+      payload = JSON.parse(rawPayload);
+    } catch {
+      if (!response.ok) {
+        console.error("AI Assistant Gemini API returned a non-JSON error", { status: response.status, payload: rawPayload });
+      }
+    }
+
+    if (!response.ok) {
+      const detail = extractGeminiErrorMessage(payload) ?? (typeof payload === "string" ? payload.trim() : "");
+      console.error("AI Assistant Gemini API returned an error", { status: response.status, payload });
+      const status = response.status === 401 || response.status === 403 || response.status === 429 ? response.status : 502;
+      return NextResponse.json(
+        { error: `Gemini API request failed (HTTP ${response.status})${detail ? `: ${detail}` : "."}` },
+        { status },
+      );
+    }
+
+    const responseError = extractGeminiErrorMessage(payload);
+    if (responseError) {
+      console.error("AI Assistant Gemini payload contained an error", { status: response.status, payload });
+      return NextResponse.json({ error: `Gemini returned an error: ${responseError}` }, { status: 502 });
+    }
+
+    const answer = extractGeminiText(payload);
     if (!answer) {
+      console.error("AI Assistant Gemini response contained no usable text", { status: response.status, payload });
       return NextResponse.json({ error: "Gemini returned an empty assistant response. Please try again." }, { status: 502 });
     }
     return NextResponse.json({ answer });
   } catch (error) {
-    const apiError = error instanceof UpstreamError ? error : geminiApiError(error);
-    console.error("AI Assistant Gemini request failed", { status: apiError.status, message: apiError.message });
+    const apiError = geminiApiError(error);
+    console.error("AI Assistant Gemini request failed", {
+      status: apiError.status,
+      payload: rawGeminiPayload(error),
+      message: apiError.message,
+    });
     return NextResponse.json({ error: apiError.message }, { status: apiError.status });
   }
 }

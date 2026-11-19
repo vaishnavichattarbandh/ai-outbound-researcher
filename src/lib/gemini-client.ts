@@ -1,4 +1,5 @@
 import { UpstreamError } from "./scraper";
+import { rawGeminiPayload } from "./gemini-response";
 
 function getErrorStatus(error: unknown): number | undefined {
   if (typeof error === "object" && error !== null && "status" in error && typeof error.status === "number") {
@@ -25,6 +26,10 @@ export async function requestGemini<T>(request: () => Promise<T>): Promise<T> {
   try {
     return await request();
   } catch (error) {
+    console.error("Gemini API request failed", {
+      status: getErrorStatus(error) ?? null,
+      payload: rawGeminiPayload(error),
+    });
     throw geminiApiError(error);
   }
 }
