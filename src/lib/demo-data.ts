@@ -15,6 +15,68 @@ const senderContext = {
   valueProposition: "We help sales teams spend less time researching and send more relevant outreach.",
 };
 
+type DemoCompany = {
+  label: string;
+  companyDomain: string;
+  summary: string;
+  fitReasoning: string;
+  signals: Array<{
+    signal: string;
+    sourceType: "Website" | "Recent News" | "Hiring/Growth";
+    sourceUrl: string;
+    evidenceExcerpt: string;
+    confidence: "High" | "Medium" | "Low";
+  }>;
+};
+
+function createDemoEntry(company: DemoCompany): DemoEntry {
+  return {
+    label: company.label,
+    request: {
+      companyDomain: company.companyDomain,
+      targetPersona: "VP of Engineering",
+      senderValueProp: senderContext.valueProposition,
+      senderContext,
+      tone: "Consultative",
+    },
+    brief: {
+      companyName: company.label,
+      oneLineSummary: company.summary,
+      icpFitScore: 7,
+      icpFitReasoning: company.fitReasoning,
+      icpFitBreakdown: {
+        gtmVelocity: { score: 7, reasoning: "The multi-product positioning creates ongoing needs to prioritize target accounts." },
+        productComplexity: { score: 8, reasoning: "Several products and buyer use cases call for tailored account conversations." },
+        signalRecency: { score: 5, reasoning: "These illustrative sample signals have not been checked for current publication dates." },
+      },
+      triggerSignals: company.signals.map((signal) => ({
+        ...signal,
+        relevanceToPersona: "The product and audience context can inform account-specific outreach.",
+      })),
+      hypothesizedPainPoints: [
+        "Connecting technical adoption signals to the right account conversations.",
+        "Prioritizing engineering initiatives without relying on broad, unverified assumptions.",
+      ],
+      outboundSequence: {
+        day1ColdEmail: {
+          subjectLine: "technical adoption signals",
+          body: `I noticed ${company.label}: ${company.summary} Engineering leaders may be looking for relevant technical adoption signals across target accounts. We help teams research those signals and tailor the next conversation. Would a short example be useful?`,
+        },
+        day2LinkedIn: {
+          connectionNote: `Noticed ${company.label}'s work across its products. I help engineering leaders connect account signals to relevant next steps.`,
+          followUpDm: `${company.label}'s product context could make account-specific research useful. How do you currently prioritize the signals worth acting on?`,
+        },
+        day5BumpEmail: {
+          subjectLine: "a useful account signal",
+          body: `Following up on technical adoption and team priorities at ${company.label}. We help teams research account signals and tailor relevant outreach for engineering leaders. Would a brief example be useful?`,
+        },
+      },
+      tone: "Consultative",
+      meta,
+    },
+  };
+}
+
 export const DEMO_DATA: Record<string, DemoEntry> = {
   "razorpay.com": {
     label: "Razorpay",
@@ -226,6 +288,194 @@ export const DEMO_DATA: Record<string, DemoEntry> = {
       meta,
     },
   },
+  "stripe.com": createDemoEntry({
+    label: "Stripe",
+    companyDomain: "stripe.com",
+    summary: "Provides payments, billing and financial infrastructure for internet businesses and platforms.",
+    fitReasoning: "Its broad payments and billing products serve different business models, making role- and segment-specific account context useful.",
+    signals: [
+      {
+        signal: "Stripe provides a suite of payments products for internet businesses and platforms.",
+        sourceType: "Website",
+        sourceUrl: "https://stripe.com",
+        evidenceExcerpt: "Stripe provides a suite of payments products for internet businesses and platforms.",
+        confidence: "High",
+      },
+      {
+        signal: "Stripe Billing helps businesses manage recurring revenue and subscription operations.",
+        sourceType: "Website",
+        sourceUrl: "https://stripe.com/billing",
+        evidenceExcerpt: "Stripe Billing helps businesses manage recurring revenue and subscription operations.",
+        confidence: "High",
+      },
+      {
+        signal: "Stripe Connect supports platforms and marketplaces that move money between parties.",
+        sourceType: "Website",
+        sourceUrl: "https://stripe.com/connect",
+        evidenceExcerpt: "Stripe Connect supports platforms and marketplaces that move money between parties.",
+        confidence: "High",
+      },
+    ],
+  }),
+  "vercel.com": createDemoEntry({
+    label: "Vercel",
+    companyDomain: "vercel.com",
+    summary: "Provides a frontend cloud platform for deploying web applications and supporting modern development teams.",
+    fitReasoning: "A developer-focused platform with team and enterprise workflows has distinct technical and business audiences to reach.",
+    signals: [
+      {
+        signal: "Vercel provides a frontend cloud platform for building and deploying web applications.",
+        sourceType: "Website",
+        sourceUrl: "https://vercel.com",
+        evidenceExcerpt: "Vercel provides a frontend cloud platform for building and deploying web applications.",
+        confidence: "High",
+      },
+      {
+        signal: "Vercel's platform includes deployment workflows, previews, and infrastructure for frontend teams.",
+        sourceType: "Website",
+        sourceUrl: "https://vercel.com/platform",
+        evidenceExcerpt: "Vercel's platform includes deployment workflows, previews, and infrastructure for frontend teams.",
+        confidence: "High",
+      },
+      {
+        signal: "Vercel offers enterprise features for teams deploying production applications at scale.",
+        sourceType: "Website",
+        sourceUrl: "https://vercel.com/enterprise",
+        evidenceExcerpt: "Vercel offers enterprise features for teams deploying production applications at scale.",
+        confidence: "High",
+      },
+    ],
+  }),
+  "notion.so": createDemoEntry({
+    label: "Notion",
+    companyDomain: "notion.so",
+    summary: "Combines documents, projects, and knowledge management in a connected workspace for teams.",
+    fitReasoning: "Its individual-to-team adoption path and broad workspace use cases create varied opportunities for tailored outreach.",
+    signals: [
+      {
+        signal: "Notion combines documents, projects, and knowledge into one connected workspace.",
+        sourceType: "Website",
+        sourceUrl: "https://www.notion.so/product",
+        evidenceExcerpt: "Notion combines documents, projects, and knowledge into one connected workspace.",
+        confidence: "High",
+      },
+      {
+        signal: "Notion AI adds search and writing capabilities to the shared workspace.",
+        sourceType: "Website",
+        sourceUrl: "https://www.notion.so/product/ai",
+        evidenceExcerpt: "Notion AI adds search and writing capabilities to the shared workspace.",
+        confidence: "High",
+      },
+      {
+        signal: "Notion offers team and enterprise plans for collaborative knowledge management.",
+        sourceType: "Website",
+        sourceUrl: "https://www.notion.so/pricing",
+        evidenceExcerpt: "Notion offers team and enterprise plans for collaborative knowledge management.",
+        confidence: "High",
+      },
+    ],
+  }),
+  "zoho.com": createDemoEntry({
+    label: "Zoho",
+    companyDomain: "zoho.com",
+    summary: "Offers a broad suite of business applications spanning customer management, finance, and operations.",
+    fitReasoning: "Its wide application portfolio serves buyers across many departments, making account selection and product-specific messaging important.",
+    signals: [
+      {
+        signal: "Zoho offers a broad suite of business applications spanning sales, finance, and operations.",
+        sourceType: "Website",
+        sourceUrl: "https://www.zoho.com",
+        evidenceExcerpt: "Zoho offers a broad suite of business applications spanning sales, finance, and operations.",
+        confidence: "High",
+      },
+      {
+        signal: "Zoho CRM supports customer-facing teams with sales automation and pipeline tools.",
+        sourceType: "Website",
+        sourceUrl: "https://www.zoho.com/crm",
+        evidenceExcerpt: "Zoho CRM supports customer-facing teams with sales automation and pipeline tools.",
+        confidence: "High",
+      },
+      {
+        signal: "Zoho One bundles business applications across multiple departments in one suite.",
+        sourceType: "Website",
+        sourceUrl: "https://www.zoho.com/one",
+        evidenceExcerpt: "Zoho One bundles business applications across multiple departments in one suite.",
+        confidence: "High",
+      },
+    ],
+  }),
 };
 
 export const DEMO_DOMAINS = Object.keys(DEMO_DATA);
+
+const PERSONA_MESSAGING: Record<string, { focus: string; pains: string[]; valueProp: string; subject: string }> = {
+  "vp of engineering": {
+    focus: "technical adoption and team priorities",
+    pains: ["Connecting technical adoption signals to the right account conversations.", "Prioritizing engineering initiatives without relying on broad, unverified assumptions."],
+    valueProp: "We help teams research technical account signals and give engineering leaders a relevant reason to engage.",
+    subject: "technical adoption signals",
+  },
+  "vp of sales": {
+    focus: "account prioritization and pipeline",
+    pains: ["Prioritizing accounts with a timely reason for sales outreach.", "Helping reps tailor first touches instead of relying on generic account notes."],
+    valueProp: "We help sales teams prioritize accounts using verified signals and write more relevant outreach.",
+    subject: "sales account focus",
+  },
+  "head of revops": {
+    focus: "consistent account data and routing",
+    pains: ["Keeping account research consistent across routing and prioritization workflows.", "Giving revenue teams a shared, evidence-backed view of why an account matters."],
+    valueProp: "We help RevOps standardize account research so routing and outreach start with consistent signals.",
+    subject: "consistent account signals",
+  },
+  "head of growth": {
+    focus: "segmentation and campaign conversion",
+    pains: ["Finding account signals that support sharper campaign segments.", "Turning product and market context into relevant growth experiments."],
+    valueProp: "We help growth teams connect account signals to focused campaigns and more relevant outreach.",
+    subject: "growth signal targeting",
+  },
+  "founder/ceo": {
+    focus: "efficient growth and pipeline priorities",
+    pains: ["Focusing limited GTM time on accounts with a clear reason to engage.", "Building a repeatable pipeline motion without adding manual research work."],
+    valueProp: "We help founders focus GTM time on accounts with a timely, evidence-backed reason to engage.",
+    subject: "founder pipeline focus",
+  },
+};
+
+export function personalizeDemoEntry(entry: DemoEntry, selectedPersona: string): { request: ResearchRequest; brief: OutboundBrief } {
+  const persona = selectedPersona.trim() || "GTM leader";
+  const messaging = PERSONA_MESSAGING[persona.toLowerCase()] ?? {
+    focus: "account priorities and relevant outreach",
+    pains: [`Understanding which account signals matter to a ${persona}.`, `Turning company context into relevant next steps for a ${persona}.`],
+    valueProp: `We help teams research account signals and tailor relevant outreach for ${persona} leaders.`,
+    subject: "account research ideas",
+  };
+  const request: ResearchRequest = {
+    ...entry.request,
+    targetPersona: persona,
+    senderValueProp: messaging.valueProp,
+    senderContext: { ...(entry.request.senderContext ?? senderContext), valueProposition: messaging.valueProp },
+  };
+  const brief: OutboundBrief = {
+    ...entry.brief,
+    triggerSignals: entry.brief.triggerSignals.map((signal) => ({
+      ...signal,
+      relevanceToPersona: `Potentially relevant to ${persona}: ${messaging.focus}; validate whether this is a current priority.`,
+    })),
+    hypothesizedPainPoints: messaging.pains,
+    outboundSequence: {
+      day1ColdEmail: {
+        subjectLine: messaging.subject,
+        body: `Noticed ${entry.label}: ${entry.brief.oneLineSummary} For a ${persona}, ${messaging.pains[0].toLowerCase()} ${messaging.valueProp} Would a short example be useful?`,
+      },
+      day2LinkedIn: {
+        connectionNote: `Noticed ${entry.label}'s work around ${messaging.focus}. I help ${persona} teams connect account signals to relevant next steps.`,
+        followUpDm: `${entry.label}'s product context could make account-specific research useful. How do you currently prioritize the signals worth acting on?`,
+      },
+      day5BumpEmail: {
+        subjectLine: "a useful account signal",
+        body: `Following up on ${messaging.focus} at ${entry.label}. ${messaging.valueProp} Would a short example tailored to your priorities be useful?`,
+      },
+    },
+  };
+  return { request, brief };
+}

@@ -6,7 +6,7 @@ import { z } from "zod";
 import ResearchForm from "@/components/ResearchForm";
 import BriefDisplay from "@/components/BriefDisplay";
 import ByokModal from "@/components/ByokModal";
-import { DEMO_DATA } from "@/lib/demo-data";
+import { DEMO_DATA, personalizeDemoEntry } from "@/lib/demo-data";
 import { loadKeys } from "@/lib/keys";
 import { loadHistory, saveHistoryEntry, type HistoryEntry } from "@/lib/history";
 import { toBatchCsv, download } from "@/lib/export";
@@ -85,9 +85,10 @@ export default function Page() {
     setHistory(saveHistoryEntry({ domain: resultDomain, request, brief: result }));
   };
 
-  const runDemo = (selectedDomain: string) => {
+  const runDemo = (selectedDomain: string, persona: string) => {
     stopDemo();
-    const entry = DEMO_DATA[selectedDomain];
+    const sample = DEMO_DATA[selectedDomain];
+    const entry = personalizeDemoEntry(sample, persona);
     setError(null);
     setBrief(null);
     setLoading(true);

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, Loader2, Sparkles, Upload } from "lucide-react";
+import { ChevronDown, Download, Loader2, Sparkles, Upload } from "lucide-react";
 import { DEMO_DATA, DEMO_DOMAINS } from "@/lib/demo-data";
 import { parseBatchCsv } from "@/lib/csv-batch";
+import { download } from "@/lib/export";
 import {
   DEFAULT_SENDER_CONTEXT,
   TONES,
@@ -15,16 +16,28 @@ type Props = {
   mode: "demo" | "live";
   loading: boolean;
   fieldErrors?: Record<string, string[] | undefined>;
-  onDemo: (domain: string) => void;
+  onDemo: (domain: string, persona: string) => void;
   onSubmit: (req: ResearchRequest) => void;
   onBatch: (requests: ResearchRequest[]) => void;
 };
 
 const inputCls =
   "w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm placeholder:text-muted/70 focus:border-accent";
+const PERSONAS = ["VP of Engineering", "VP of Sales", "Head of RevOps", "Head of Growth", "Founder/CEO"] as const;
+const SAMPLE_CSV = `company_name,domain,persona
+Razorpay,razorpay.com,VP of Sales
+Freshworks,freshworks.com,Head of Growth
+Postman,postman.com,VP of Engineering
+Stripe,stripe.com,Head of RevOps
+Vercel,vercel.com,Founder/CEO
+Notion,notion.so,VP of Sales
+`;
 
 export default function ResearchForm({ mode, loading, fieldErrors, onDemo, onSubmit, onBatch }: Props) {
-  const [form, setForm] = useState({ companyDomain: "", targetPersona: "" });
+  const [form, setForm] = useState<{ companyDomain: string; targetPersona: string }>({
+    companyDomain: "",
+    targetPersona: PERSONAS[0],
+  });
   const [senderContext, setSenderContext] = useState(DEFAULT_SENDER_CONTEXT);
   const [tone, setTone] = useState<(typeof TONES)[number]>("Consultative");
   const [batchMode, setBatchMode] = useState(false);
@@ -58,6 +71,34 @@ export default function ResearchForm({ mode, loading, fieldErrors, onDemo, onSub
   const setContext = (key: keyof typeof senderContext) => (
     event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) => setSenderContext((current) => ({ ...current, [key]: event.target.value }));
+  const personaSelector = (
+    <div className="mb-5">
+      <p className="text-sm font-medium">Target persona</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {PERSONAS.map((persona) => (
+          <button
+            key={persona}
+            type="button"
+            aria-pressed={form.targetPersona === persona}
+            onClick={() => setForm((current) => ({ ...current, targetPersona: persona }))}
+            className={`rounded-full border px-3 py-1.5 text-sm ${form.targetPersona === persona ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent"}`}
+          >
+            {persona}
+          </button>
+        ))}
+      </div>
+      <label className="mt-3 block text-sm font-medium">
+        Or enter a custom persona
+        <input
+          className={`${inputCls} mt-1.5 font-normal`}
+          placeholder="e.g. Director of Customer Success"
+          value={form.targetPersona}
+          onChange={set("targetPersona")}
+        />
+        {fieldErrors?.targetPersona?.[0] && <p className="mt-1 text-xs text-red-700">{fieldErrors.targetPersona[0]}</p>}
+      </label>
+    </div>
+  );
 
   if (mode === "demo") {
     return (
@@ -66,17 +107,18 @@ export default function ResearchForm({ mode, loading, fieldErrors, onDemo, onSub
         <p className="mt-1 text-sm text-muted">
           Pick a company to see a full sample brief instantly. Nothing is sent to any API.
         </p>
+        {personaSelector}
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           {DEMO_DOMAINS.map((domain) => (
             <button
               key={domain}
               disabled={loading}
-              onClick={() => onDemo(domain)}
+              onClick={() => onDemo(domain, form.targetPersona)}
               className="rounded-lg border border-line bg-paper px-4 py-3 text-left transition hover:border-accent hover:bg-accent-soft disabled:opacity-50"
             >
               <span className="block font-medium">{DEMO_DATA[domain].label}</span>
               <span className="block text-sm text-muted">{domain}</span>
-              <span className="mt-1 block text-xs text-muted">Persona: {DEMO_DATA[domain].request.targetPersona}</span>
+              <span className="mt-1 block text-xs text-muted">Persona: {form.targetPersona}</span>
             </button>
           ))}
         </div>
@@ -131,8 +173,8 @@ export default function ResearchForm({ mode, loading, fieldErrors, onDemo, onSub
       <div className="mb-5 flex flex-wrap items-center gap-2 text-sm">
         <span className="text-muted">Fill sample inputs:</span>
         {DEMO_DOMAINS.map((domain) => (
-          <button type="button" key={domain} onClick={() => fill(DEMO_DATA[domain].request)} className="rounded-full border border-line px-3 py-1 hover:border-accent hover:bg-accent-soft">
-            {domain}
+          <button type="button" key={domain} onClick={() => fill({ ...DEMO_DATA[domain].request, targetPersona: form.targetPersona })} className="rounded-full border border-line px-3 py-1 hover:border-accent hover:bg-accent-soft">
+            {DEMO_DATA[domain].label}
           </button>
         ))}
       </div>
@@ -178,6 +220,9 @@ export default function ResearchForm({ mode, loading, fieldErrors, onDemo, onSub
             <div>
               <h3 className="font-medium">Upload accounts CSV</h3>
               <p className="mt-1 text-sm text-muted">Required columns: <code>company_name</code>, <code>domain</code>, <code>persona</code>. Up to 100 accounts; processed sequentially.</p>
+              <button type="button" onClick={() => download("sample-accounts.csv", SAMPLE_CSV, "text/csv;charset=utf-8")} className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:underline">
+                <Download className="h-4 w-4" /> Download sample CSV
+              </button>
             </div>
           </div>
           <input
@@ -194,18 +239,14 @@ export default function ResearchForm({ mode, loading, fieldErrors, onDemo, onSub
         </section>
       ) : (
         <form onSubmit={(event) => { event.preventDefault(); onSubmit(researchRequest()); }}>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4">
             <label className="block text-sm font-medium">
               Company domain
               <input className={`${inputCls} mt-1.5 font-normal`} placeholder="razorpay.com" value={form.companyDomain} onChange={set("companyDomain")} />
               {err("companyDomain")}
             </label>
-            <label className="block text-sm font-medium">
-              Target persona
-              <input className={`${inputCls} mt-1.5 font-normal`} placeholder="VP of Marketing" value={form.targetPersona} onChange={set("targetPersona")} />
-              {err("targetPersona")}
-            </label>
           </div>
+          {personaSelector}
 
           <button type="submit" disabled={loading} className="mt-5 inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-60">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
