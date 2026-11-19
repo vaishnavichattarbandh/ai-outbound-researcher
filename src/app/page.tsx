@@ -477,7 +477,7 @@ export default function Page() {
         onSaved={setHasKey}
         onTryDemo={() => { setByokOpen(false); switchMode("demo"); }}
       />
-      <AIAssistant context={assistantContext} onOpenSettings={() => setByokOpen(true)} />
+      <AIAssistant context={assistantContext} hasGeminiKey={hasKey} onOpenSettings={() => setByokOpen(true)} />
     </main>
   );
 }

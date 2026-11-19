@@ -4,24 +4,12 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { Loader2, MessageCircle, Send, Sparkles, Trash2, X } from "lucide-react";
 import { extractGeminiErrorMessage, extractGeminiText } from "@/lib/gemini-response";
-import type { OutboundBrief } from "@/lib/schemas";
+import { getLocalAssistantResponse } from "@/lib/local-assistant";
+import type { AssistantContext } from "@/lib/local-assistant";
 import { loadKeys } from "@/lib/keys";
 
 type Message = { role: "user" | "model"; content: string };
-type AssistantBriefContext = {
-  companyName: string;
-  oneLineSummary: string;
-  triggerSignals: Array<Pick<OutboundBrief["triggerSignals"][number], "signal" | "relevanceToPersona" | "evidenceExcerpt">>;
-  hypothesizedPainPoints: string[];
-  outboundSequence: OutboundBrief["outboundSequence"];
-};
-type AssistantContext = {
-  companyDomain?: string;
-  targetPersona?: string;
-  activeBrief?: AssistantBriefContext;
-  senderValueProposition?: string;
-};
-type Props = { context?: AssistantContext; onOpenSettings: () => void };
+type Props = { context?: AssistantContext; hasGeminiKey: boolean; onOpenSettings: () => void };
 
 const STARTERS = [
   "What is the strongest signal here?",
@@ -33,7 +21,7 @@ const RETRY_DELAY_MS = 600;
 const MAX_RETRIES = 1;
 const ASSISTANT_TIMEOUT_MS = 18_000;
 
-export default function AIAssistant({ context, onOpenSettings }: Props) {
+export default function AIAssistant({ context, hasGeminiKey, onOpenSettings }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -45,15 +33,19 @@ export default function AIAssistant({ context, onOpenSettings }: Props) {
     const trimmedQuestion = question.trim();
     if (!trimmedQuestion || loading) return;
     const apiKey = loadKeys().gemini;
-    if (!apiKey) {
-      setError("Add your Gemini API key in API Settings to use the AI Assistant.");
-      return;
-    }
-
     const nextMessages = [...messages, { role: "user" as const, content: trimmedQuestion }];
     setMessages(nextMessages);
     setInput("");
     setError("");
+    if (!apiKey) {
+      const localAnswer = getLocalAssistantResponse(trimmedQuestion, context);
+      setMessages([...nextMessages, {
+        role: "model",
+        content: `Built-in response (no Gemini key needed).\n\n${localAnswer}`,
+      }]);
+      return;
+    }
+
     setLoading(true);
     setRetryCount(0);
     try {
@@ -118,9 +110,16 @@ export default function AIAssistant({ context, onOpenSettings }: Props) {
       setMessages((current) => [...current, { role: "model", content: answer }]);
     } catch (caught) {
       const timedOut = caught instanceof Error && (caught.name === "AbortError" || caught.name === "TimeoutError");
-      setError(timedOut
-        ? "The Assistant request timed out. Please try again with a shorter question."
-        : caught instanceof Error ? caught.message : "The assistant request failed. Please try again.");
+      const failure = caught instanceof Error ? caught.message : "Unknown Gemini error";
+      console.warn("AI Assistant Gemini request failed; using local response", { timedOut, failure });
+      const localAnswer = getLocalAssistantResponse(trimmedQuestion, context);
+      setMessages((current) => [...current, {
+        role: "model",
+        content: `${timedOut
+          ? "Gemini timed out; here's an instant local response instead."
+          : "Gemini couldn't respond; here's an instant local response instead."}\n\n${localAnswer}`,
+      }]);
+      setError("");
     } finally {
       setLoading(false);
       setRetryCount(0);
@@ -148,7 +147,9 @@ export default function AIAssistant({ context, onOpenSettings }: Props) {
               </span>
               <div>
                 <h2 className="text-sm font-semibold text-ink">AI Assistant</h2>
-                <p className="text-xs text-muted">Gemini · outreach help or general Q&amp;A</p>
+                <p className="text-xs text-muted">
+                  {hasGeminiKey ? "Gemini enabled · local fallback ready" : "Instant local help · no key required"}
+                </p>
               </div>
             </div>
             <button
@@ -162,6 +163,15 @@ export default function AIAssistant({ context, onOpenSettings }: Props) {
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col p-3">
+            {!hasGeminiKey && (
+              <p className="mb-2 shrink-0 text-xs text-muted">
+                The built-in assistant is ready. A Gemini key is optional for more flexible answers.
+                {" "}
+                <button type="button" onClick={onOpenSettings} className="font-medium text-accent underline underline-offset-2">
+                  API Settings
+                </button>
+              </p>
+            )}
             {context?.activeBrief && (
               <p
                 className="mb-2 shrink-0 truncate text-xs text-muted"
