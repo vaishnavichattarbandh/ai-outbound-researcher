@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Check, Copy, Download, ExternalLink, RefreshCw, Send, ShieldCheck } from "lucide-react";
 import { z } from "zod";
 import type { OutboundBrief, ResearchRequest } from "@/lib/schemas";
-import { DEFAULT_SENDER_CONTEXT, TONES, wordCount } from "@/lib/schemas";
+import { DEFAULT_SENDER_CONTEXT, formatZodIssues, TONES, wordCount } from "@/lib/schemas";
 import { download, toCsv, toMarkdown } from "@/lib/export";
 import { loadKeys } from "@/lib/keys";
 
@@ -144,7 +144,11 @@ export default function BriefDisplay({
         throw new Error(errorData.success ? errorData.data.error ?? "Could not regenerate sequence." : "Could not regenerate sequence.");
       }
       const parsed = sequenceResponseSchema.safeParse(data);
-      if (!parsed.success) throw new Error("The server returned an invalid sequence. Please try again.");
+      if (!parsed.success) {
+        const validator = formatZodIssues(parsed.error.issues).join("; ");
+        console.error("Regenerated sequence validation failed", { domain, validator });
+        throw new Error(`The regenerated sequence failed validation: ${validator}`);
+      }
       setSequence(parsed.data.outboundSequence);
     } catch (error) {
       setRegenerationError(error instanceof Error ? error.message : "Could not regenerate sequence. Please try again.");
@@ -323,8 +327,8 @@ export default function BriefDisplay({
           <div className="rounded-lg border border-line p-4">
             <h4 className="font-medium">Day 2 · LinkedIn</h4>
             <label className="mt-3 block text-sm text-muted">Connection note</label>
-            {bodyField(sequence.day2LinkedIn.connectionNote, (value) => setSequence((current) => ({ ...current, day2LinkedIn: { ...current.day2LinkedIn, connectionNote: value } })), "LinkedIn connection note", 301)}
-            <p className="text-right text-xs text-muted">{sequence.day2LinkedIn.connectionNote.length} / 300 characters</p>
+            {bodyField(sequence.day2LinkedIn.connectionNote, (value) => setSequence((current) => ({ ...current, day2LinkedIn: { ...current.day2LinkedIn, connectionNote: value } })), "LinkedIn connection note", 501)}
+            <p className="text-right text-xs text-muted">{sequence.day2LinkedIn.connectionNote.length} / 500 characters</p>
             <label className="mt-3 block text-sm text-muted">Follow-up DM</label>
             {bodyField(sequence.day2LinkedIn.followUpDm, (value) => setSequence((current) => ({ ...current, day2LinkedIn: { ...current.day2LinkedIn, followUpDm: value } })), "LinkedIn follow-up DM", 1000)}
             <p className="text-right text-xs text-muted">{sequence.day2LinkedIn.followUpDm.length} characters</p>

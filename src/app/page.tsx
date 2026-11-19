@@ -5,12 +5,13 @@ import { Download, Info, KeyRound, LockKeyhole, Workflow, X } from "lucide-react
 import { z } from "zod";
 import ResearchForm from "@/components/ResearchForm";
 import BriefDisplay from "@/components/BriefDisplay";
+import AIAssistant from "@/components/AIAssistant";
 import ByokModal from "@/components/ByokModal";
 import { DEMO_DATA, personalizeDemoEntry } from "@/lib/demo-data";
 import { loadKeys } from "@/lib/keys";
 import { loadHistory, saveHistoryEntry, type HistoryEntry } from "@/lib/history";
 import { toBatchCsv, download } from "@/lib/export";
-import { OutboundBriefSchema, type OutboundBrief, type ResearchRequest } from "@/lib/schemas";
+import { formatZodIssues, OutboundBriefSchema, type OutboundBrief, type ResearchRequest } from "@/lib/schemas";
 
 const STAGES = [
   { key: "website", label: "Reading company website" },
@@ -134,14 +135,31 @@ export default function Page() {
     let result: OutboundBrief | null = null;
     const consumeLine = (line: string) => {
       if (!line.trim()) return;
-      const parsedEvent = StreamEventSchema.safeParse(JSON.parse(line));
-      if (!parsedEvent.success) throw new Error("The server sent an invalid progress update.");
+      let payload: unknown;
+      try {
+        payload = JSON.parse(line);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const validator = `streamEvent [json_parse]: ${detail}`;
+        console.error("Live research stream validation failed", { domain: request.companyDomain, validator });
+        throw new ResearchError(`The research stream could not be parsed: ${validator}`, 502);
+      }
+      const parsedEvent = StreamEventSchema.safeParse(payload);
+      if (!parsedEvent.success) {
+        const validator = formatZodIssues(parsedEvent.error.issues).join("; ");
+        console.error("Live research stream validation failed", { domain: request.companyDomain, validator });
+        throw new ResearchError(`The research stream failed validation: ${validator}`, 502);
+      }
       const event = parsedEvent.data;
       if (event.type === "progress") onProgress(event.stage, event.status);
       if (event.type === "error") throw new ResearchError(event.error, event.status);
       if (event.type === "result") {
         const parsedBrief = OutboundBriefSchema.safeParse(event.data);
-        if (!parsedBrief.success) throw new ResearchError("The server returned a brief in an unexpected format.", 502);
+        if (!parsedBrief.success) {
+          const validator = formatZodIssues(parsedBrief.error.issues).join("; ");
+          console.error("Live research brief validation failed", { domain: request.companyDomain, validator });
+          throw new ResearchError(`The live research brief failed validation: ${validator}`, 502);
+        }
         result = parsedBrief.data;
       }
     };
@@ -159,7 +177,11 @@ export default function Page() {
     } finally {
       reader.releaseLock();
     }
-    if (!result) throw new Error("Research ended without a brief. Please try again.");
+    if (!result) {
+      const validator = "streamResult [missing_result]: research ended without a brief event";
+      console.error("Live research stream validation failed", { domain: request.companyDomain, validator });
+      throw new ResearchError(`The research stream failed validation: ${validator}`, 502);
+    }
     return result;
   };
 
@@ -238,6 +260,12 @@ export default function Page() {
     senderCompany: request.senderContext?.companyName,
     senderProductPitch: request.senderContext?.productPitch,
   })));
+  const assistantContext = brief && researchRequest ? {
+    companyDomain: domain,
+    targetPersona: researchRequest.targetPersona,
+    activeBrief: brief,
+    senderValueProposition: researchRequest.senderContext?.valueProposition ?? researchRequest.senderValueProp,
+  } : undefined;
 
   return (
     <main className="mx-auto max-w-4xl px-4 pb-20">
@@ -285,6 +313,7 @@ export default function Page() {
       </div>
 
       <ResearchForm mode={mode} loading={loading} fieldErrors={error?.fieldErrors} onDemo={runDemo} onSubmit={runLive} onBatch={runBatch} />
+      <AIAssistant context={assistantContext} onOpenSettings={() => setByokOpen(true)} />
 
       {loading && (
         <section className="mt-5 rounded-xl border border-white/70 bg-white/70 p-5 shadow-lg shadow-slate-900/5 backdrop-blur-md" aria-live="polite">
@@ -320,7 +349,6 @@ export default function Page() {
           {error.status === 401 && <p className="mt-1">Check that your Gemini key is saved and valid in API Settings. If the error mentions Serper, check that key too.</p>}
           {error.status === 429 && <p className="mt-1">Your provider may be rate-limiting requests. Wait a minute or check your key’s quota.</p>}
           {error.status === 422 && <p className="mt-1">Check the domain and Serper key. The site may block reading; search fallback needs a working Serper key.</p>}
-          {error.status === 502 && <p className="mt-1">The generated sequence failed evidence or format checks. Try again with a more specific domain.</p>}
           {(error.status === 401 || error.status === 422) && <button onClick={() => setByokOpen(true)} className="mt-3 rounded-md border border-red-300 px-3 py-1.5">Check API keys</button>}
         </div>
       )}

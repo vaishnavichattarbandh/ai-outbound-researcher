@@ -41,10 +41,9 @@ export const ResearchRequestSchema = z.object({
 });
 export type ResearchRequest = z.infer<typeof ResearchRequestSchema>;
 
-const sentenceCount = (s: string) => s.trim().split(/(?<=[.!?])\s+/).filter(Boolean).length;
 const emailSchema = z.object({
-  subjectLine: z.string().min(1),
-  body: z.string().refine((s) => wordCount(s) < 80, "Email body must be under 80 words"),
+  subjectLine: z.string().trim().min(1).max(200),
+  body: z.string().trim().min(1).refine((s) => wordCount(s) <= 120, "Email body should be no longer than 120 words"),
 });
 
 export const OutboundBriefSchema = z.object({
@@ -60,31 +59,23 @@ export const OutboundBriefSchema = z.object({
   triggerSignals: z
     .array(
       z.object({
-        signal: z.string().min(1),
+        signal: z.string().trim().min(1),
         sourceType: z.enum(SOURCE_TYPES),
-        relevanceToPersona: z.string().min(1),
+        relevanceToPersona: z.string().trim().min(1),
         sourceUrl: z.string().url(),
-        evidenceExcerpt: z.string().refine(
-          (excerpt) => wordCount(excerpt) >= 8 && wordCount(excerpt) <= 20,
-          "Evidence excerpt must be 8-20 words"
-        ),
+        evidenceExcerpt: z.string().trim().min(1).max(2000),
         publishedAt: z.string().optional(),
         confidence: z.enum(["High", "Medium", "Low"]),
       })
     )
-    .min(2)
-    .max(4),
-  hypothesizedPainPoints: z.array(z.string().min(1)).min(2).max(3),
+    .min(1)
+    .max(6),
+  hypothesizedPainPoints: z.array(z.string().trim().min(1)).min(1).max(5),
   outboundSequence: z.object({
-    day1ColdEmail: emailSchema.extend({
-      subjectLine: z
-        .string()
-        .refine((s) => wordCount(s) >= 2 && wordCount(s) <= 4, "Subject must be 2-4 words")
-        .refine((s) => s === s.toLowerCase(), "Subject must be lowercase"),
-    }),
+    day1ColdEmail: emailSchema,
     day2LinkedIn: z.object({
-      connectionNote: z.string().min(1).max(300),
-      followUpDm: z.string().min(1).refine((s) => sentenceCount(s) === 2, "LinkedIn DM must be exactly 2 sentences"),
+      connectionNote: z.string().trim().min(1).max(500),
+      followUpDm: z.string().trim().min(1).max(1200),
     }),
     day5BumpEmail: emailSchema,
   }),
@@ -96,11 +87,17 @@ export const OutboundBriefSchema = z.object({
       researchedAt: z.string().optional(),
       searchStatus: z.enum(["available", "partial", "unavailable", "not-configured", "no-results"]).optional(),
       searchError: z.string().optional(),
+      validationIssue: z.string().optional(),
     })
     .optional(),
 });
 export type OutboundBrief = z.infer<typeof OutboundBriefSchema>;
 export type TriggerSignal = OutboundBrief["triggerSignals"][number];
+
+export function formatZodIssues(issues: readonly z.ZodIssue[]): string[] {
+  return issues.map((issue) => `${issue.path.join(".") || "(root)"} [${issue.code}]: ${issue.message}`);
+}
+
 export const CopyRegenerationRequestSchema = ResearchRequestSchema.extend({
   action: z.enum(["sequence", "signal"]),
   currentBrief: OutboundBriefSchema,

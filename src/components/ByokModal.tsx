@@ -46,7 +46,7 @@ export default function ByokModal({ open, onClose, onSaved, onTryDemo }: Props) 
         </p>
 
         <label className="mt-6 block text-sm font-medium">
-          Gemini API key <span className="font-normal text-muted">(required for live research)</span>
+          Gemini API key <span className="font-normal text-muted">(required for live research and AI Assistant)</span>
           <input
             type="password" autoComplete="new-password" value={gemini} onChange={(e) => setGemini(e.target.value)}
             placeholder={hasSavedGemini ? `Saved key ••••${savedGeminiSuffix} — leave blank to keep` : "Paste Gemini key"}
@@ -95,7 +95,7 @@ export default function ByokModal({ open, onClose, onSaved, onTryDemo }: Props) 
         {!hasSavedGemini && (
           <div className="mt-8 rounded-xl border border-accent/15 bg-accent-soft/70 p-4">
             <h3 className="font-medium">No Gemini key yet?</h3>
-            <p className="mt-1 text-sm text-muted">Add your own key for live research, or try a sample brief without any keys.</p>
+            <p className="mt-1 text-sm text-muted">Add your own key for live research and the AI Assistant, or try a sample brief without any keys.</p>
             <button onClick={onTryDemo} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-sm font-medium hover:border-accent">
               <Play className="h-4 w-4" /> Try Demo Mode
             </button>

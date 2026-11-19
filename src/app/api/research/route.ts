@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CopyRegenerationRequestSchema, ResearchRequestSchema } from "@/lib/schemas";
+import { CopyRegenerationRequestSchema, formatZodIssues, ResearchRequestSchema } from "@/lib/schemas";
 import { enrich, UpstreamError, type EnrichmentProgress } from "@/lib/scraper";
 import { regenerateSequence, synthesize } from "@/lib/synthesizer";
 
@@ -38,8 +38,14 @@ export async function POST(req: NextRequest) {
   const researchRequest = isRegeneration ? undefined : ResearchRequestSchema.safeParse(body);
   const parsed = regeneration ?? researchRequest;
   if (!parsed?.success) {
+    const validationIssues = parsed && !parsed.success ? formatZodIssues(parsed.error.issues) : ["request [invalid]: unable to validate request"];
+    console.warn("Research request validation failed", { validator: validationIssues });
     return NextResponse.json(
-      { error: "Invalid input", fieldErrors: parsed && !parsed.success ? parsed.error.flatten().fieldErrors : undefined },
+      {
+        error: "Invalid input",
+        fieldErrors: parsed && !parsed.success ? parsed.error.flatten().fieldErrors : undefined,
+        validationIssues,
+      },
       { status: 400 }
     );
   }
@@ -103,16 +109,18 @@ export async function POST(req: NextRequest) {
             const brief = await synthesize(geminiKey, data, context, (_stage, status) => {
               send({ type: "progress", stage: "gemini", status });
             });
+            const { validationIssue, ...briefData } = brief;
             send({
               type: "result",
               data: {
-                ...brief,
+                ...briefData,
                 meta: {
                   enrichmentSource: context.source,
                   latencyMs: Date.now() - started,
                   researchedAt: new Date().toISOString(),
                   searchStatus: context.searchStatus,
                   searchError: context.searchError,
+                  ...(validationIssue ? { validationIssue } : {}),
                 },
               },
             });
@@ -140,14 +148,16 @@ export async function POST(req: NextRequest) {
   try {
     const context = await enrich(data.companyDomain, serperKey);
     const brief = await synthesize(geminiKey, data, context);
+    const { validationIssue, ...briefData } = brief;
     return NextResponse.json({
-      ...brief,
+      ...briefData,
       meta: {
         enrichmentSource: context.source,
         latencyMs: Date.now() - started,
         researchedAt: new Date().toISOString(),
         searchStatus: context.searchStatus,
         searchError: context.searchError,
+        ...(validationIssue ? { validationIssue } : {}),
       },
     });
   } catch (err) {
