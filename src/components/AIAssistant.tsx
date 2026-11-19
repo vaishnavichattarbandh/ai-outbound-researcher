@@ -2,14 +2,12 @@
 
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { Loader2, MessageCircle, Send, Sparkles, Trash2, X } from "lucide-react";
-import { extractGeminiErrorMessage, extractGeminiText } from "@/lib/gemini-response";
+import { MessageCircle, Send, Sparkles, Trash2, X } from "lucide-react";
 import { getLocalAssistantResponse } from "@/lib/local-assistant";
 import type { AssistantContext } from "@/lib/local-assistant";
-import { loadKeys } from "@/lib/keys";
 
 type Message = { role: "user" | "model"; content: string };
-type Props = { context?: AssistantContext; hasGeminiKey: boolean; onOpenSettings: () => void };
+type Props = { context?: AssistantContext };
 
 const STARTERS = [
   "What is the strongest signal here?",
@@ -17,113 +15,19 @@ const STARTERS = [
   "What should I verify before reaching out?",
   "Help me improve my opening line.",
 ];
-const RETRY_DELAY_MS = 600;
-const MAX_RETRIES = 1;
-const ASSISTANT_TIMEOUT_MS = 18_000;
 
-export default function AIAssistant({ context, hasGeminiKey, onOpenSettings }: Props) {
+export default function AIAssistant({ context }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
   const [isOpen, setIsOpen] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
 
-  const ask = async (question: string) => {
+  const ask = (question: string) => {
     const trimmedQuestion = question.trim();
-    if (!trimmedQuestion || loading) return;
-    const apiKey = loadKeys().gemini;
+    if (!trimmedQuestion) return;
     const nextMessages = [...messages, { role: "user" as const, content: trimmedQuestion }];
-    setMessages(nextMessages);
+    const localAnswer = getLocalAssistantResponse(trimmedQuestion, context);
+    setMessages([...nextMessages, { role: "model", content: localAnswer }]);
     setInput("");
-    setError("");
-    if (!apiKey) {
-      const localAnswer = getLocalAssistantResponse(trimmedQuestion, context);
-      setMessages([...nextMessages, {
-        role: "model",
-        content: `Built-in response (no Gemini key needed).\n\n${localAnswer}`,
-      }]);
-      return;
-    }
-
-    setLoading(true);
-    setRetryCount(0);
-    try {
-      const requestBody = JSON.stringify({ messages: nextMessages.slice(-8), context });
-      let response: Response;
-      let rawPayload: string;
-      for (let attempt = 0; ; attempt++) {
-        const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), ASSISTANT_TIMEOUT_MS);
-        try {
-          response = await fetch("/api/assistant", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-gemini-api-key": apiKey },
-            body: requestBody,
-            signal: controller.signal,
-          });
-          rawPayload = await response.text();
-        } finally {
-          window.clearTimeout(timeout);
-        }
-        const shouldRetry = (response.status === 429 || response.status === 503) && attempt < MAX_RETRIES;
-        if (!shouldRetry) break;
-        setRetryCount(attempt + 1);
-        console.warn("AI Assistant request will retry", { status: response.status, attempt: attempt + 1, payload: rawPayload });
-        await new Promise((resolve) => window.setTimeout(resolve, RETRY_DELAY_MS));
-      }
-
-      if (!response.ok && (response.status === 429 || response.status === 503)) {
-        console.error("AI Assistant temporary API error persisted after retries", { status: response.status, payload: rawPayload });
-        throw new Error(
-          response.status === 429
-            ? "Gemini is busy right now. Please wait a moment and try again."
-            : "Gemini is temporarily unavailable. Please try again shortly.",
-        );
-      }
-      if (!response.ok && response.status === 504) {
-        console.error("AI Assistant request timed out", { status: response.status, payload: rawPayload });
-        throw new Error("The Assistant request timed out. Please try again with a shorter question.");
-      }
-
-      let payload: unknown;
-      try {
-        payload = JSON.parse(rawPayload);
-      } catch {
-        console.error("AI Assistant API returned a non-JSON response", { status: response.status, payload: rawPayload });
-        const detail = rawPayload.trim().slice(0, 500);
-        throw new Error(
-          response.ok
-            ? `The assistant service returned a non-JSON response (HTTP ${response.status}). Check the server logs.`
-            : `Assistant request failed (HTTP ${response.status})${detail ? `: ${detail}` : "."}`,
-        );
-      }
-      if (!response.ok) {
-        console.error("AI Assistant API returned an error", { status: response.status, payload });
-        throw new Error(extractGeminiErrorMessage(payload) ?? `Assistant request failed (HTTP ${response.status}).`);
-      }
-      const answer = extractGeminiText(payload);
-      if (!answer) {
-        console.error("AI Assistant API response had no usable answer", { status: response.status, payload });
-        throw new Error(`The assistant returned no readable answer (HTTP ${response.status}). Please try again.`);
-      }
-      setMessages((current) => [...current, { role: "model", content: answer }]);
-    } catch (caught) {
-      const timedOut = caught instanceof Error && (caught.name === "AbortError" || caught.name === "TimeoutError");
-      const failure = caught instanceof Error ? caught.message : "Unknown Gemini error";
-      console.warn("AI Assistant Gemini request failed; using local response", { timedOut, failure });
-      const localAnswer = getLocalAssistantResponse(trimmedQuestion, context);
-      setMessages((current) => [...current, {
-        role: "model",
-        content: `${timedOut
-          ? "Gemini timed out; here's an instant local response instead."
-          : "Gemini couldn't respond; here's an instant local response instead."}\n\n${localAnswer}`,
-      }]);
-      setError("");
-    } finally {
-      setLoading(false);
-      setRetryCount(0);
-    }
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -147,9 +51,7 @@ export default function AIAssistant({ context, hasGeminiKey, onOpenSettings }: P
               </span>
               <div>
                 <h2 className="text-sm font-semibold text-ink">AI Assistant</h2>
-                <p className="text-xs text-muted">
-                  {hasGeminiKey ? "Gemini enabled · local fallback ready" : "Instant local help · no key required"}
-                </p>
+                <p className="text-xs text-muted">Instant built-in guidance · no key required</p>
               </div>
             </div>
             <button
@@ -163,15 +65,6 @@ export default function AIAssistant({ context, hasGeminiKey, onOpenSettings }: P
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col p-3">
-            {!hasGeminiKey && (
-              <p className="mb-2 shrink-0 text-xs text-muted">
-                The built-in assistant is ready. A Gemini key is optional for more flexible answers.
-                {" "}
-                <button type="button" onClick={onOpenSettings} className="font-medium text-accent underline underline-offset-2">
-                  API Settings
-                </button>
-              </p>
-            )}
             {context?.activeBrief && (
               <p
                 className="mb-2 shrink-0 truncate text-xs text-muted"
@@ -188,9 +81,8 @@ export default function AIAssistant({ context, hasGeminiKey, onOpenSettings }: P
                   <button
                     key={starter}
                     type="button"
-                    disabled={loading}
-                    onClick={() => void ask(starter)}
-                    className="inline-flex items-center gap-1 rounded-full border border-line bg-white/70 px-2.5 py-1.5 text-xs text-muted hover:border-accent hover:bg-accent-soft hover:text-accent disabled:opacity-50"
+                    onClick={() => ask(starter)}
+                    className="inline-flex items-center gap-1 rounded-full border border-line bg-white/70 px-2.5 py-1.5 text-xs text-muted hover:border-accent hover:bg-accent-soft hover:text-accent"
                   >
                     <Sparkles className="h-3 w-3 shrink-0" />
                     {starter}
@@ -206,23 +98,6 @@ export default function AIAssistant({ context, hasGeminiKey, onOpenSettings }: P
                     </p>
                   </div>
                 ))}
-                {loading && (
-                  <p className="flex items-center gap-2 text-sm text-muted">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {retryCount ? `Retrying (${retryCount}/${MAX_RETRIES})…` : "Thinking…"}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {error && (
-              <div role="alert" className="mt-2 shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                <p>{error}</p>
-                {/API key/i.test(error) && (
-                  <button type="button" onClick={onOpenSettings} className="mt-1 font-medium underline underline-offset-2">
-                    Open API Settings
-                  </button>
-                )}
               </div>
             )}
 
@@ -233,20 +108,19 @@ export default function AIAssistant({ context, hasGeminiKey, onOpenSettings }: P
                 rows={1}
                 maxLength={3000}
                 value={input}
-                onChange={(event) => { setInput(event.target.value); setError(""); }}
+                onChange={(event) => setInput(event.target.value)}
                 placeholder="Ask anything, or ask about this account..."
-                className="min-h-11 max-h-28 flex-1 resize-y rounded-lg border border-line bg-white px-3 py-2.5 text-sm placeholder:text-muted/70 focus:border-accent"
+                className="min-h-11 max-h-28 flex-1 resize-y rounded-lg border border-line bg-white px-3 py-2 text-sm leading-5 placeholder:text-muted/70 focus:border-accent"
               />
-              <button type="submit" disabled={loading || !input.trim()} aria-label="Send question" className="inline-flex h-11 shrink-0 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50">
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                <span>{loading ? "Wait" : "Ask"}</span>
+              <button type="submit" disabled={!input.trim()} aria-label="Send question" className="inline-flex h-11 shrink-0 items-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50">
+                <Send className="h-4 w-4" />
+                <span>Ask</span>
               </button>
             </form>
-            {(messages.length > 0 || error) && (
+            {messages.length > 0 && (
               <button
                 type="button"
-                disabled={loading}
-                onClick={() => { setMessages([]); setInput(""); setError(""); }}
+                onClick={() => { setMessages([]); setInput(""); }}
                 className="mt-2 inline-flex shrink-0 items-center gap-1.5 self-start text-xs text-muted hover:text-ink disabled:opacity-50"
               >
                 <Trash2 className="h-3.5 w-3.5" /> Clear conversation
