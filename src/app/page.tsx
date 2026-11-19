@@ -313,7 +313,6 @@ export default function Page() {
       </div>
 
       <ResearchForm mode={mode} loading={loading} fieldErrors={error?.fieldErrors} onDemo={runDemo} onSubmit={runLive} onBatch={runBatch} />
-      <AIAssistant context={assistantContext} onOpenSettings={() => setByokOpen(true)} />
 
       {loading && (
         <section className="mt-5 rounded-xl border border-white/70 bg-white/70 p-5 shadow-lg shadow-slate-900/5 backdrop-blur-md" aria-live="polite">
@@ -468,6 +467,7 @@ export default function Page() {
         onSaved={setHasKey}
         onTryDemo={() => { setByokOpen(false); switchMode("demo"); }}
       />
+      <AIAssistant context={assistantContext} onOpenSettings={() => setByokOpen(true)} />
     </main>
   );
 }

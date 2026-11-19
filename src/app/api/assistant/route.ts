@@ -86,7 +86,9 @@ export async function POST(req: NextRequest) {
     if (!response.ok) {
       const detail = extractGeminiErrorMessage(payload) ?? (typeof payload === "string" ? payload.trim() : "");
       console.error("AI Assistant Gemini API returned an error", { status: response.status, payload });
-      const status = response.status === 401 || response.status === 403 || response.status === 429 ? response.status : 502;
+      const status = response.status === 401 || response.status === 403 || response.status === 429 || response.status === 503
+        ? response.status
+        : 502;
       return NextResponse.json(
         { error: `Gemini API request failed (HTTP ${response.status})${detail ? `: ${detail}` : "."}` },
         { status },
