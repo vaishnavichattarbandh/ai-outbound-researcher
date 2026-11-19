@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { z } from "zod";
 import { GEMINI_MODEL, GEMINI_THINKING_CONFIG } from "./ai-config";
-import { requestGemini } from "./gemini-client";
+import { createGeminiClient, requestGemini } from "./gemini-client";
 import {
   OutboundBriefSchema,
   DEFAULT_SENDER_CONTEXT,
@@ -333,7 +333,7 @@ export async function synthesize(
   ctx: Enrichment,
   onProgress?: ProgressCallback,
 ): Promise<SynthesizedBrief> {
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient(apiKey);
   const prompt = buildPrompt(req, ctx);
   let issues = "Gemini did not return a usable brief.";
   onProgress?.("gemini", "running");
@@ -398,7 +398,7 @@ export async function regenerateSequence(
   tone: ResearchRequest["tone"],
   signalIndex?: number,
 ): Promise<OutboundBrief["outboundSequence"]> {
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = createGeminiClient(apiKey);
   const selectedSignals = signalIndex === undefined ? brief.triggerSignals : [brief.triggerSignals[signalIndex]].filter(Boolean);
   if (!selectedSignals.length) throw new UpstreamError("Select a valid trigger signal and try again.", 400);
   const evidence = selectedSignals

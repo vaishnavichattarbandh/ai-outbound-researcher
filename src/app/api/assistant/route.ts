@@ -1,13 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GEMINI_MODEL, GEMINI_THINKING_CONFIG } from "@/lib/ai-config";
-import { geminiApiError } from "@/lib/gemini-client";
+import { geminiApiError, GEMINI_REQUEST_TIMEOUT_MS } from "@/lib/gemini-client";
 import { extractGeminiErrorMessage, extractGeminiText, rawGeminiPayload } from "@/lib/gemini-response";
-import { OutboundBriefSchema, formatZodIssues } from "@/lib/schemas";
+import { formatZodIssues } from "@/lib/schemas";
 import { z } from "zod";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 20;
 
+const AssistantBriefContextSchema = z.object({
+  companyName: z.string().max(160),
+  oneLineSummary: z.string().max(500),
+  triggerSignals: z.array(z.object({
+    signal: z.string().max(300),
+    relevanceToPersona: z.string().max(300),
+    evidenceExcerpt: z.string().max(350),
+  })).max(3),
+  hypothesizedPainPoints: z.array(z.string().max(300)).max(3),
+  outboundSequence: z.object({
+    day1ColdEmail: z.object({ subjectLine: z.string().max(200), body: z.string().max(1000) }),
+    day2LinkedIn: z.object({
+      connectionNote: z.string().max(500),
+      followUpDm: z.string().max(1200),
+    }),
+    day5BumpEmail: z.object({ subjectLine: z.string().max(200), body: z.string().max(1000) }),
+  }),
+});
 const AssistantRequestSchema = z.object({
   messages: z.array(z.object({
     role: z.enum(["user", "model"]),
@@ -16,7 +34,7 @@ const AssistantRequestSchema = z.object({
   context: z.object({
     companyDomain: z.string().max(253).optional(),
     targetPersona: z.string().max(120).optional(),
-    activeBrief: OutboundBriefSchema.optional(),
+    activeBrief: AssistantBriefContextSchema.optional(),
     senderValueProposition: z.string().max(600).optional(),
   }).optional(),
 });
@@ -40,9 +58,9 @@ export async function POST(req: NextRequest) {
     console.warn("AI Assistant request validation failed", { validator: validationIssues });
     return NextResponse.json({ error: "Invalid assistant request.", validationIssues }, { status: 400 });
   }
-  const totalMessageLength = parsed.data.messages.reduce((total, message) => total + message.content.length, 0);
-  if (totalMessageLength > 20000) {
-    return NextResponse.json({ error: "The conversation is too long. Clear it and start a new one." }, { status: 400 });
+  const messages = parsed.data.messages.slice(-8);
+  while (messages.length > 1 && messages.reduce((total, message) => total + message.content.length, 0) > 12000) {
+    messages.shift();
   }
 
   const context = parsed.data.context;
@@ -60,9 +78,10 @@ export async function POST(req: NextRequest) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        signal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemInstruction }] },
-          contents: parsed.data.messages.map((message) => ({
+          contents: messages.map((message) => ({
             role: message.role,
             parts: [{ text: message.content }],
           })),
@@ -86,9 +105,25 @@ export async function POST(req: NextRequest) {
     if (!response.ok) {
       const detail = extractGeminiErrorMessage(payload) ?? (typeof payload === "string" ? payload.trim() : "");
       console.error("AI Assistant Gemini API returned an error", { status: response.status, payload });
-      const status = response.status === 401 || response.status === 403 || response.status === 429 || response.status === 503
-        ? response.status
-        : 502;
+      if (response.status === 429) {
+        return NextResponse.json(
+          { error: "Gemini is under heavy demand or has reached a temporary rate limit. Please wait a moment and try again." },
+          { status: 429 },
+        );
+      }
+      if (response.status === 503) {
+        return NextResponse.json(
+          { error: "Gemini is temporarily unavailable. Please try again shortly." },
+          { status: 503 },
+        );
+      }
+      if (response.status === 504) {
+        return NextResponse.json(
+          { error: "The Gemini request timed out. Please try again with a shorter question." },
+          { status: 504 },
+        );
+      }
+      const status = response.status === 401 || response.status === 403 ? response.status : 502;
       return NextResponse.json(
         { error: `Gemini API request failed (HTTP ${response.status})${detail ? `: ${detail}` : "."}` },
         { status },
@@ -114,6 +149,12 @@ export async function POST(req: NextRequest) {
       payload: rawGeminiPayload(error),
       message: apiError.message,
     });
-    return NextResponse.json({ error: apiError.message }, { status: apiError.status });
+    const status = apiError.status === 504 ? 504 : apiError.status;
+    return NextResponse.json(
+      { error: apiError.status === 504
+        ? "The Gemini request timed out. Please try again with a shorter question."
+        : apiError.message },
+      { status },
+    );
   }
 }

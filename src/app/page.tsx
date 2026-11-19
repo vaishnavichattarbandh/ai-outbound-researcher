@@ -263,7 +263,17 @@ export default function Page() {
   const assistantContext = brief && researchRequest ? {
     companyDomain: domain,
     targetPersona: researchRequest.targetPersona,
-    activeBrief: brief,
+    activeBrief: {
+      companyName: brief.companyName,
+      oneLineSummary: brief.oneLineSummary,
+      triggerSignals: brief.triggerSignals.slice(0, 3).map(({ signal, relevanceToPersona, evidenceExcerpt }) => ({
+        signal,
+        relevanceToPersona,
+        evidenceExcerpt: evidenceExcerpt.slice(0, 350),
+      })),
+      hypothesizedPainPoints: brief.hypothesizedPainPoints.slice(0, 3),
+      outboundSequence: brief.outboundSequence,
+    },
     senderValueProposition: researchRequest.senderContext?.valueProposition ?? researchRequest.senderValueProp,
   } : undefined;
 

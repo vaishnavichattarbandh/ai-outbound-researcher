@@ -8,10 +8,17 @@ import type { OutboundBrief } from "@/lib/schemas";
 import { loadKeys } from "@/lib/keys";
 
 type Message = { role: "user" | "model"; content: string };
+type AssistantBriefContext = {
+  companyName: string;
+  oneLineSummary: string;
+  triggerSignals: Array<Pick<OutboundBrief["triggerSignals"][number], "signal" | "relevanceToPersona" | "evidenceExcerpt">>;
+  hypothesizedPainPoints: string[];
+  outboundSequence: OutboundBrief["outboundSequence"];
+};
 type AssistantContext = {
   companyDomain?: string;
   targetPersona?: string;
-  activeBrief?: OutboundBrief;
+  activeBrief?: AssistantBriefContext;
   senderValueProposition?: string;
 };
 type Props = { context?: AssistantContext; onOpenSettings: () => void };
@@ -22,7 +29,9 @@ const STARTERS = [
   "What should I verify before reaching out?",
   "Help me improve my opening line.",
 ];
-const RETRY_DELAYS_MS = [400, 900] as const;
+const RETRY_DELAY_MS = 600;
+const MAX_RETRIES = 1;
+const ASSISTANT_TIMEOUT_MS = 18_000;
 
 export default function AIAssistant({ context, onOpenSettings }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -48,21 +57,28 @@ export default function AIAssistant({ context, onOpenSettings }: Props) {
     setLoading(true);
     setRetryCount(0);
     try {
-      const requestBody = JSON.stringify({ messages: nextMessages.slice(-12), context });
+      const requestBody = JSON.stringify({ messages: nextMessages.slice(-8), context });
       let response: Response;
       let rawPayload: string;
       for (let attempt = 0; ; attempt++) {
-        response = await fetch("/api/assistant", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-gemini-api-key": apiKey },
-          body: requestBody,
-        });
-        rawPayload = await response.text();
-        const shouldRetry = (response.status === 429 || response.status === 503) && attempt < RETRY_DELAYS_MS.length;
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), ASSISTANT_TIMEOUT_MS);
+        try {
+          response = await fetch("/api/assistant", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-gemini-api-key": apiKey },
+            body: requestBody,
+            signal: controller.signal,
+          });
+          rawPayload = await response.text();
+        } finally {
+          window.clearTimeout(timeout);
+        }
+        const shouldRetry = (response.status === 429 || response.status === 503) && attempt < MAX_RETRIES;
         if (!shouldRetry) break;
         setRetryCount(attempt + 1);
         console.warn("AI Assistant request will retry", { status: response.status, attempt: attempt + 1, payload: rawPayload });
-        await new Promise((resolve) => window.setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+        await new Promise((resolve) => window.setTimeout(resolve, RETRY_DELAY_MS));
       }
 
       if (!response.ok && (response.status === 429 || response.status === 503)) {
@@ -72,6 +88,10 @@ export default function AIAssistant({ context, onOpenSettings }: Props) {
             ? "Gemini is busy right now. Please wait a moment and try again."
             : "Gemini is temporarily unavailable. Please try again shortly.",
         );
+      }
+      if (!response.ok && response.status === 504) {
+        console.error("AI Assistant request timed out", { status: response.status, payload: rawPayload });
+        throw new Error("The Assistant request timed out. Please try again with a shorter question.");
       }
 
       let payload: unknown;
@@ -97,7 +117,10 @@ export default function AIAssistant({ context, onOpenSettings }: Props) {
       }
       setMessages((current) => [...current, { role: "model", content: answer }]);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The assistant request failed. Please try again.");
+      const timedOut = caught instanceof Error && (caught.name === "AbortError" || caught.name === "TimeoutError");
+      setError(timedOut
+        ? "The Assistant request timed out. Please try again with a shorter question."
+        : caught instanceof Error ? caught.message : "The assistant request failed. Please try again.");
     } finally {
       setLoading(false);
       setRetryCount(0);
@@ -176,7 +199,7 @@ export default function AIAssistant({ context, onOpenSettings }: Props) {
                 {loading && (
                   <p className="flex items-center gap-2 text-sm text-muted">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {retryCount ? `Retrying (${retryCount}/${RETRY_DELAYS_MS.length})…` : "Thinking…"}
+                    {retryCount ? `Retrying (${retryCount}/${MAX_RETRIES})…` : "Thinking…"}
                   </p>
                 )}
               </div>
